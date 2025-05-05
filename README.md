@@ -76,9 +76,7 @@ Edit
 pip install -r requirements.txt
 ✅ STEP 5: Write Your Chatbot Script
 chatbot.py
-python
-Copy
-Edit
+
 from gpt4all import GPT4All
 
 def run_chatbot():
@@ -99,6 +97,7 @@ def run_chatbot():
 
 if __name__ == "__main__":
     run_chatbot()
+
 Example:
 You: area of a circle
 🤖: The formula is π × r².
