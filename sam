@@ -1,0 +1,63 @@
+import json
+from gpt4all import GPT4All
+import os
+
+# Load formulas from a JSON file or create an empty one if it doesn't exist
+def load_formula_db():
+    if os.path.exists('formulas.json'):
+        with open('formulas.json', 'r') as file:
+            return json.load(file)
+    else:
+        return {}
+
+# Save formulas to the JSON file
+def save_formula_db(formula_db):
+    with open('formulas.json', 'w') as file:
+        json.dump(formula_db, file, indent=4)
+
+# Query GPT4All for a formula when it's not found in the database
+def query_formula_from_gpt(question):
+    # Initialize GPT4All model
+    model = GPT4All("mistral-7b-instruct")
+    model.open()
+    
+    # Prompt GPT4All to give the formula based on the user's question
+    prompt = f"Please provide the formula for the following question: {question}"
+    
+    # Get the response from GPT4All
+    response = model.prompt(prompt)
+    
+    return response
+
+# Function to handle user input and check for formulas
+def run_chatbot():
+    # Load existing formula database or create an empty one
+    formula_db = load_formula_db()
+
+    print("🤖 Formula Bot Ready (offline). Type 'exit' to quit.\n")
+
+    while True:
+        question = input("You: ")
+        if question.lower() == "exit":
+            break
+        
+        # Check if the formula is in the database
+        question_lower = question.lower()
+        
+        if question_lower in formula_db:
+            # If formula exists in the JSON file, return it
+            print(f"📘 Formula Answer (from database): {formula_db[question_lower]}")
+        else:
+            # If formula does not exist, query GPT4All
+            print("🤖 I don't know the formula for that. Let me find it for you...")
+            answer = query_formula_from_gpt(question)
+            
+            # Save the new formula in the database (JSON file)
+            formula_db[question_lower] = answer
+            save_formula_db(formula_db)
+            
+            # Return the newly found formula
+            print(f"📘 Formula Answer (from GPT4All): {answer}")
+
+# Run the chatbot
+run_chatbot()
