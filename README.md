@@ -139,6 +139,10 @@ if question.lower() in formula_db:
 else:
     response = model.prompt(f"Give me the formula for {question}")
     print("🤖:", response)
+
+
+
+    
 🛠 Optional Improvements You Can Add Later
 🔊 Voice input using SpeechRecognition or Whisper
 
