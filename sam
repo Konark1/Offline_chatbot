@@ -61,3 +61,45 @@ def run_chatbot():
 
 # Run the chatbot
 run_chatbot()
+
+////
+from gpt4all import GPT4All
+
+def run_chatbot():
+    # Use the same model you downloaded
+    model = GPT4All("mistral-7b-instruct")  # or "nous-hermes-llama2-13b"
+    model.open()
+
+    print("🤖 Formula Bot Ready (offline). Type 'exit' to quit.\n")
+
+    while True:
+        question = input("You: ")
+        if question.lower() == "exit":
+            break
+
+        prompt = f"Give me the formula for {question}."
+        response = model.prompt(prompt)
+        print("🤖:", response)
+
+if __name__ == "__main__":
+    run_chatbot()
+////
+import json
+
+with open("formulas.json", "r") as f:
+    formula_db = json.load(f)
+
+question = input("You: ")
+if question.lower() in formula_db:
+    print("📘 (from database):", formula_db[question.lower()])
+else:
+    response = model.prompt(f"Give me the formula for {question}")
+    print("🤖:", response)
+///
+{
+  "area of circle": "π × r²",
+  "area of triangle": "½ × base × height",
+  "volume of sphere": "(4/3) × π × r³",
+  "kinetic energy": "½ × m × v²"
+}
+
