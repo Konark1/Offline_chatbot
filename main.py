@@ -10,12 +10,30 @@ from functools import lru_cache
 import numpy as np
 import time
 import torch  
+import sys
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+# Configure Tesseract path for Windows
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+# Test Tesseract installation
+try:
+    test_text = pytesseract.get_tesseract_version()
+    logging.info(f"Tesseract OCR version: {test_text}")
+except Exception as e:
+    logging.error(f"Tesseract OCR not properly configured: {str(e)}")
+    logging.error("Please verify Tesseract installation and PATH")
+    exit(1)
+
 class StudyBot:
     def __init__(self):
+        # Create required directories
+        for directory in ['models', 'documents', 'images']:
+            os.makedirs(directory, exist_ok=True)
+            
         try:
             model_path = os.path.join("models", "mistral-7b-instruct-v0.1.Q4_0.gguf")
             if not os.path.exists(model_path):
@@ -149,31 +167,26 @@ Result: [final answer with unit]
         return f"🧮 **Formula Result:**\n{response}"
 
     def analyze_image(self, image, page_num):
-        """Analyze image content and extract information."""
+        """Optimized image analysis."""
         try:
-            # Convert to grayscale for better processing
+            # Resize large images for faster processing
+            height, width = image.shape[:2]
+            if width > 1500 or height > 1500:
+                scale = min(1500/width, 1500/height)
+                image = cv2.resize(image, None, fx=scale, fy=scale)
+            
+            # Convert to grayscale and improve contrast
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            gray = cv2.equalizeHist(gray)
             
-            # Extract text using OCR
-            text = pytesseract.image_to_string(gray)
+            # Configure Tesseract for faster processing
+            custom_config = r'--oem 3 --psm 1 -l eng'  # Fast mode
+            text = pytesseract.image_to_string(gray, config=custom_config)
             
-            # Detect image type (graph, diagram, picture)
-            edges = cv2.Canny(gray, 100, 200)
-            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            # Basic image classification
-            if len(contours) > 20:
-                image_type = "Graph/Chart"
-            elif len(contours) > 5:
-                image_type = "Diagram"
-            else:
-                image_type = "Picture"
-                
             return {
-                'type': image_type,
+                'type': "Image",  # Simplified classification
                 'text': text.strip(),
-                'page': page_num,
-                'complexity': len(contours)
+                'page': page_num
             }
         except Exception as e:
             logging.error(f"Image analysis failed: {str(e)}")
@@ -201,12 +214,12 @@ Text Content: {analysis['text']}
             return ""
 
     def extract_full_pdf_content(self, file_path):
-        """Extract text content from PDF with better error handling."""
+        """Optimized text extraction from PDF."""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"PDF file not found: {file_path}")
         
         try:
-            full_text = ""
+            full_text = []  # Use list instead of string concatenation
             with fitz.open(file_path) as doc:
                 total_pages = len(doc)
                 if total_pages == 0:
@@ -214,47 +227,54 @@ Text Content: {analysis['text']}
                     
                 logging.info(f"Processing {total_pages} pages...")
                 for i, page in enumerate(doc):
-                    try:
-                        if self.progress_callback:
-                            progress = (i + 1) / total_pages * 100
-                            self.progress_callback(progress)
-                            self.status_callback(f"Processing page {i+1}/{total_pages}")
+                    if self.progress_callback:
+                        progress = (i + 1) / total_pages * 100
+                        self.progress_callback(progress)
                         
-                        page_text = page.get_text().strip()
-                        if not page_text:
-                            page_text = self.extract_text_from_image_page(page)
-                        full_text += f"\n=== Page {i+1} ===\n{page_text}\n"
-                        
-                    except Exception as e:
-                        logging.error(f"Error processing page {i+1}: {str(e)}")
-                        full_text += f"\n=== Page {i+1} [Error] ===\n"
-                        
-                if not full_text.strip():
-                    raise ValueError("No text content could be extracted from the PDF")
+                    # Extract text with optimized parameters
+                    page_text = page.get_text(
+                        "text",  # Extract plain text only
+                        flags=fitz.TEXT_PRESERVE_WHITESPACE,  # Preserve formatting
+                        sort=True  # Sort text blocks
+                    ).strip()
                     
-                return full_text
+                    if page_text:
+                        full_text.append(f"\n=== Page {i+1} ===\n{page_text}")
+                    else:
+                        # Only process images if no text is found
+                        image_text = self.extract_text_from_image_page(page)
+                        if image_text:
+                            full_text.append(f"\n=== Page {i+1} ===\n{image_text}")
+                        
+            return "\n".join(full_text)  # Join at the end
                 
         except Exception as e:
             logging.error(f"PDF processing failed: {str(e)}")
             raise
 
-    def split_text_into_chunks(self, text, chunk_size=500, overlap=50):  
-        """Improved chunking with overlap for better context."""
+    def split_text_into_chunks(self, text, chunk_size=800, overlap=50):
+        """Faster text chunking."""
         chunks = []
-        start = 0
-        while start < len(text):
-            end = start + chunk_size
-            if end > len(text):
-                end = len(text)
-            chunk = text[start:end]
-            # Find a good breaking point
-            if end < len(text):
-                last_period = chunk.rfind('.')
-                if last_period > chunk_size * 0.7:  # At least 70% of chunk size
-                    end = start + last_period + 1
-                    chunk = text[start:end]
-            chunks.append(chunk)
-            start = end - overlap  # Create overlap between chunks
+        sentences = text.split('.')
+        current_chunk = []
+        current_size = 0
+        
+        for sentence in sentences:
+            sentence = sentence.strip() + '.'
+            sentence_size = len(sentence)
+            
+            if current_size + sentence_size > chunk_size:
+                if current_chunk:
+                    chunks.append(' '.join(current_chunk))
+                current_chunk = [sentence]
+                current_size = sentence_size
+            else:
+                current_chunk.append(sentence)
+                current_size += sentence_size
+        
+        if current_chunk:
+            chunks.append(' '.join(current_chunk))
+        
         return chunks
 
     def index_chapter(self, file_path):
@@ -262,6 +282,13 @@ Text Content: {analysis['text']}
             # Add memory management call
             self.manage_memory()
             
+            # Ensure file path is in documents directory
+            if not os.path.dirname(file_path):
+                file_path = os.path.join("documents", file_path)
+            
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"PDF file not found: {file_path}. Please place PDF files in the 'documents' folder.")
+
             cache_key = os.path.basename(file_path)
             self.current_pdf = cache_key
 
@@ -427,22 +454,45 @@ Answer (be specific and brief):"""
             raise
 
     def search_query(self, question):
-        """General search using GPT model"""
-        prompt = f"""
-Provide a detailed answer to this question:
+        """Hybrid search: Try online, fallback to offline model."""
+        try:
+            # 1. Try online search (Wikipedia API example)
+            wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{question.replace(' ', '_')}"
+            try:
+                resp = requests.get(wiki_url, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    extract = data.get('extract')
+                    if extract:
+                        return f"🌐 Wikipedia:\n{extract}"
+            except Exception as e:
+                logging.warning(f"Online search failed: {str(e)}")
 
-Question: {question}
-
-Please structure your response with:
-- Main explanation
-- Key points and concepts
-- Examples or applications
-- Related topics
-- Additional resources (if relevant)
-
-Answer:
+            # 2. Fallback to offline model
+            cache_key = f"search:{question.lower()}"
+            if cache_key in self.cache:
+                logging.info("Using cached search result")
+                return f"🔍 From Cache:\n{self.cache[cache_key]}"
+            prompt = f"""Provide a concise answer to: {question}
+Format your response as:
+1. Brief Answer (2-3 sentences)
+2. Key Points (bullet points)
+3. Example (if applicable)
+Keep the response focused and direct.
 """
-        return "🔍 Search Result:\n" + self.model.generate(prompt)
+            response = self.model.generate(
+                prompt,
+                max_tokens=256,
+                temp=0.7,
+                top_k=40,
+                top_p=0.4,
+                repeat_penalty=1.18
+            )
+            self.cache[cache_key] = response
+            return f"🤖 Offline Model:\n{response}"
+        except Exception as e:
+            logging.error(f"Search query failed: {str(e)}")
+            raise ValueError(f"Search failed: {str(e)}")
 
     def clear_cache(self):
         """Clear the formula cache."""
@@ -479,36 +529,28 @@ Answer:
             self.cache.clear()
             logging.info("Main cache cleared due to size limit")
 
-    def safe_generate(self, prompt, max_retries=3, max_length=2048):
+    def safe_generate(self, prompt, max_retries=3, max_length=512):
         """Safe model generation with retries and error handling."""
         last_error = None
-        
         for attempt in range(max_retries):
             try:
-                # Ensure prompt is not too long
-                if len(prompt) > 8192:
-                    prompt = prompt[:8192] + "..."
-                    
+                if len(prompt) > 4096:
+                    prompt = prompt[:4096] + "..."
                 response = self.model.generate(
                     prompt,
                     max_tokens=max_length,
                     temp=0.7,
                     top_k=40,
                     top_p=0.4,
-                    repeat_penalty=1.18,
-                    n_threads=8
+                    repeat_penalty=1.18
                 )
-                
                 if not response or len(response.strip()) < 10:
                     raise ValueError("Generated response too short or empty")
-                    
                 return response
-                
             except Exception as e:
                 last_error = e
                 logging.warning(f"Generation attempt {attempt + 1} failed: {str(e)}")
-                time.sleep(1)  # Wait before retry
-                
+                time.sleep(1)
         raise RuntimeError(f"Model generation failed after {max_retries} attempts: {str(last_error)}")
 
     def detect_hardware(self):
@@ -545,6 +587,10 @@ Answer:
         except Exception as e:
             logging.warning(f"Hardware detection failed: {str(e)}")
             return 'cpu'  # Safe fallback
+
+    def cli_progress_bar(self, current, total, width=50):
+        progress = int(width * current / total)
+        return f"[{'=' * progress}{' ' * (width-progress)}] {current}/{total}"
 
 def main():
     bot = StudyBot()
@@ -602,4 +648,6 @@ def main():
             print("❌ Invalid command. Type 'help' for available commands.")
 
 if __name__ == "__main__":
+    start = time.time()
     main()
+    print("Step took", time.time() - start, "seconds")
