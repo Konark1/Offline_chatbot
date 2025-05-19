@@ -1,0 +1,9 @@
+pip install gpt4all
+pip install PyMuPDF
+pip install pytesseract
+pip install opencv-python
+pip install Pillow
+pip install numpy
+pip install torch
+pip install requests
+pip install tk
